@@ -24,6 +24,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* PATCH: Allow render mode override. */
+#ifndef TTF_FT_RENDER_MODE_OVERRIDE
+#define TTF_FT_RENDER_MODE_OVERRIDE ft_render_mode_normal
+#endif
+
 #ifdef HAVE_ALLOCA_H
 #include <alloca.h>
 #endif
@@ -59,6 +64,17 @@
 #define CACHED_METRICS	0x10
 #define CACHED_BITMAP	0x01
 #define CACHED_PIXMAP	0x02
+
+static void BlendWithGammaCorrection(
+	Uint8 br, Uint8 bg, Uint8 bb,
+	Uint8 fr, Uint8 fg, Uint8 fb,
+	Uint8 ar, Uint8 ag, Uint8 ab,
+	Uint8 *r, Uint8 *g, Uint8 *b) {
+	static const float G = 2.2f;
+	*r = 255 * pow(pow(fr / 255.0, G) * ar / 255.0 + pow(br / 255.0, G) * (1 - ar / 255.0), 1 / G);
+	*g = 255 * pow(pow(fg / 255.0, G) * ag / 255.0 + pow(bg / 255.0, G) * (1 - ag / 255.0), 1 / G);
+	*b = 255 * pow(pow(fb / 255.0, G) * ab / 255.0 + pow(bb / 255.0, G) * (1 - ab / 255.0), 1 / G);
+}
 
 /* Cached glyph information */
 typedef struct cached_glyph {
@@ -703,7 +719,7 @@ static FT_Error Load_Glyph( TTF_Font* font, Uint16 ch, c_glyph* cached, int want
 			FT_Glyph_Stroke( &bitmap_glyph, stroker, 1 /* delete the original glyph */ );
 			FT_Stroker_Done( stroker );
 			/* Render the glyph */
-			error = FT_Glyph_To_Bitmap( &bitmap_glyph, mono ? ft_render_mode_mono : ft_render_mode_normal, 0, 1 );
+			error = FT_Glyph_To_Bitmap( &bitmap_glyph, mono ? ft_render_mode_mono : TTF_FT_RENDER_MODE_OVERRIDE, 0, 1 );
 			if( error ) {
 				FT_Done_Glyph( bitmap_glyph );
 				return error;
@@ -711,7 +727,7 @@ static FT_Error Load_Glyph( TTF_Font* font, Uint16 ch, c_glyph* cached, int want
 			src = &((FT_BitmapGlyph)bitmap_glyph)->bitmap;
 		} else {
 			/* Render the glyph */
-			error = FT_Render_Glyph( glyph, mono ? ft_render_mode_mono : ft_render_mode_normal );
+			error = FT_Render_Glyph( glyph, mono ? ft_render_mode_mono : TTF_FT_RENDER_MODE_OVERRIDE );
 			if( error ) {
 				return error;
 			}
@@ -1629,7 +1645,14 @@ SDL_Surface* TTF_RenderUNICODE_Shaded( TTF_Font* font,
 	}
 
 	/* Create the target surface */
-	textbuf = SDL_AllocSurface(SDL_SWSURFACE, width, height, 8, 0, 0, 0, 0);
+	const int subpixel = TTF_FT_RENDER_MODE_OVERRIDE == FT_RENDER_MODE_LCD;
+	if (subpixel) {
+		textbuf = SDL_AllocSurface(SDL_SWSURFACE, width, height, 32, 0, 0, 0, 0);
+		// FT_Vector sub[3] = {{-21, 0}, {0, 0}, {21, 0}};
+		// FT_Library_SetLcdGeometry(library, sub);
+	} else {
+		textbuf = SDL_AllocSurface(SDL_SWSURFACE, width, height, 8, 0, 0, 0, 0);
+	}
 	if( textbuf == NULL ) {
 		return NULL;
 	}
@@ -1639,21 +1662,24 @@ SDL_Surface* TTF_RenderUNICODE_Shaded( TTF_Font* font,
 	dst_check = (Uint8*)textbuf->pixels + textbuf->pitch * textbuf->h;
 
 	/* Fill the palette with NUM_GRAYS levels of shading from bg to fg */
-	palette = textbuf->format->palette;
 	rdiff = fg.r - bg.r;
 	gdiff = fg.g - bg.g;
 	bdiff = fg.b - bg.b;
+	if (!subpixel) {
+		palette = textbuf->format->palette;
 
-	for( index = 0; index < NUM_GRAYS; ++index ) {
-		palette->colors[index].r = bg.r + (index*rdiff) / (NUM_GRAYS-1);
-		palette->colors[index].g = bg.g + (index*gdiff) / (NUM_GRAYS-1);
-		palette->colors[index].b = bg.b + (index*bdiff) / (NUM_GRAYS-1);
+		for( index = 0; index < NUM_GRAYS; ++index ) {
+			palette->colors[index].r = bg.r + (index*rdiff) / (NUM_GRAYS-1);
+			palette->colors[index].g = bg.g + (index*gdiff) / (NUM_GRAYS-1);
+			palette->colors[index].b = bg.b + (index*bdiff) / (NUM_GRAYS-1);
+		}
 	}
 
 	/* check kerning */
 	use_kerning = FT_HAS_KERNING( font->face ) && font->kerning;
 	
 	/* Load and render each character */
+	if (subpixel) SDL_FillRect(textbuf, NULL, SDL_MapRGB(textbuf->format, bg.r, bg.g, bg.b));
 	swapped = TTF_byteswapped;
 	for( ch = text; *ch; ++ch ) {
 		Uint16 c = *ch;
@@ -1684,7 +1710,7 @@ SDL_Surface* TTF_RenderUNICODE_Shaded( TTF_Font* font,
 		glyph = font->current;
 		/* Ensure the width of the pixmap is correct. On some cases,
 		 * freetype may report a larger pixmap than possible.*/
-		width = glyph->pixmap.width;
+		width = glyph->pixmap.width / (subpixel ? 3 : 1);
 		if (font->outline <= 0 && width > glyph->maxx - glyph->minx) {
 			width = glyph->maxx - glyph->minx;
 		}
@@ -1695,14 +1721,35 @@ SDL_Surface* TTF_RenderUNICODE_Shaded( TTF_Font* font,
 			xstart += delta.x >> 6;
 		}
 
+		Uint32* dst32;
 		current = &glyph->pixmap;
 		for( row = 0; row < current->rows; ++row ) {
 			dst = (Uint8*) textbuf->pixels +
-				(row+ystart+glyph->yoffset) * textbuf->pitch +
-				xstart + glyph->minx;
+				(row+ystart+glyph->yoffset) * textbuf->pitch;
+			if (subpixel) {
+				dst32 = (Uint32*) dst + xstart + glyph->minx;
+			} else {
+				dst += xstart + glyph->minx;
+			}
 			src = current->buffer + row * current->pitch;
-			for ( col=width; col>0 && dst < dst_check; --col ) {
-				*dst++ |= *src++;
+			if (subpixel) {
+				Uint8 r, g, b;
+				for ( col=width; col>0 && (Uint8*) dst32 < dst_check; --col ) {
+					SDL_GetRGB(*dst32, textbuf->format, &r, &g, &b);
+					// *dst32++ = SDL_MapRGB(
+					// 	textbuf->format,
+					// 	r + rdiff * (*src++) / 255,
+					// 	g + gdiff * (*src++) / 255,
+					// 	b + bdiff * (*src++) / 255
+					// );
+					BlendWithGammaCorrection(r, g, b, fg.r, fg.g, fg.b, src[0], src[1], src[2], &r, &g, &b);
+					*dst32++ = SDL_MapRGB(textbuf->format, r, g, b);
+					src += 3;
+				}
+			} else {
+				for ( col=width; col>0 && dst < dst_check; --col ) {
+					*dst++ |= *src++;
+				}
 			}
 		}
 

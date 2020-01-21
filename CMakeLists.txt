@@ -47,6 +47,8 @@ target_link_libraries(${BIN_TARGET} PRIVATE
   m
 )
 
+target_compile_definitions(${BIN_TARGET} PRIVATE TTF_FT_RENDER_MODE_OVERRIDE=FT_RENDER_MODE_LCD)
+
 foreach(
   def_name
   PPU_Y
