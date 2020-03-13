@@ -1,6 +1,9 @@
 *.o
 .DS_Store
 commander
+gcp
+gmv
 /build/
 /build-*/
 nbproject/**
+/cache/

@@ -36,6 +36,8 @@ main() {
     res/*.png \
     res/wy_scorpio.ttf \
     "$BUILD_DIR/commander" \
+    "$BUILD_DIR/gcp" \
+    "$BUILD_DIR/gmv" \
     "$OUT" \
     -all-root -no-xattrs -noappend -no-exports
 }

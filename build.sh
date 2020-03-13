@@ -59,6 +59,7 @@ build() {
     -DCMAKE_TOOLCHAIN_FILE="$BUILDROOT/output/host/usr/share/buildroot/toolchainfile.cmake"
   cmake --build . -j $(getconf _NPROCESSORS_ONLN)
   cd -
+  BUILDROOT="$BUILDROOT" script/build-gcp-gmv-in-buildroot.sh "build-$TARGET"
 }
 
 package_opk() {
