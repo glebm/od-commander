@@ -95,6 +95,17 @@ bool Run(Args... args)
     return SpawnAndWait(execve_args) == 0;
 }
 
+template <typename... Args>
+bool RunAndReport(Args... args)
+{
+    return Run(args...);
+}
+
+bool HaveRsync() {
+    static const bool kHaveRsync = Run("rsync", "--version");
+    return kHaveRsync;
+}
+
 } // namespace
 
 void File_utils::copyFile(const std::vector<std::string> &p_src, const std::string &p_dest)
@@ -146,7 +157,11 @@ void File_utils::copyFile(const std::vector<std::string> &p_src, const std::stri
         }
         if (l_execute)
         {
-            Run("cp", "-r", *l_it, p_dest);
+            if (HaveRsync()) {
+                RunAndReport("rsync", "-rah", "--progress", *l_it, p_dest);
+            } else {
+                Run("cp", "-r", *l_it, p_dest);
+            }
             Run("sync", l_destFile);
         }
     }
